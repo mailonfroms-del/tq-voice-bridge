@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>T&Q Voice Bridge</title>
+<style>
+body{margin:0;font-family:Arial,sans-serif;background:#f4f7fb;color:#162033;display:grid;place-items:center;min-height:100vh;padding:20px;box-sizing:border-box}
+.card{width:min(480px,100%);background:#fff;border:1px solid #dfe5ee;border-radius:18px;padding:22px;box-shadow:0 10px 30px rgba(16,24,40,.12)}
+h1{font-size:20px;margin:0 0 6px}.sub{font-size:12px;color:#667085;line-height:1.5}.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}select,button{font:inherit;border-radius:10px;padding:10px 13px}select{border:1px solid #d0d5dd;background:#fff;flex:1}button{border:0;background:#2457d6;color:#fff;font-weight:800;cursor:pointer}button.stop{background:#b42318}button.secondary{background:#fff;color:#344054;border:1px solid #d0d5dd}.status{margin-top:15px;padding:12px;border-radius:12px;background:#f8fafc;font-size:13px}.status.live{background:#fff1f0;color:#b42318;font-weight:800}.heard{margin-top:12px;padding:12px;border:1px dashed #b8c9ff;border-radius:12px;min-height:55px;font-size:13px;line-height:1.5}.small{font-size:11px;color:#667085;margin-top:12px}.ok{color:#166534}.bad{color:#991b1b}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🎙️ T&Q Voice Bridge</h1>
+  <div class="sub" id="modeText">Preparing microphone…</div>
+  <div class="row">
+    <select id="lang">
+      <option value="en-IN">English (India)</option>
+      <option value="hi-IN">Hindi</option>
+      <option value="te-IN">Telugu</option>
+      <option value="ta-IN">Tamil</option>
+      <option value="kn-IN">Kannada</option>
+      <option value="ml-IN">Malayalam</option>
+    </select>
+  </div>
+  <div class="row">
+    <button id="start">🎙️ Start Listening</button>
+    <button id="stop" class="stop">⏹ Stop</button>
+    <button id="close" class="secondary">Close</button>
+  </div>
+  <div id="status" class="status">Click Start Listening and allow microphone access.</div>
+  <div id="heard" class="heard">Recognized speech will appear here.</div>
+  <div class="small">This page is intentionally hosted outside Google Apps Script because Apps Script HTML Service sandboxes sensitive microphone APIs. The recognized text is sent only to the window that opened this bridge.</div>
+</div>
+<script>
+(function(){
+  const params=new URLSearchParams(location.search);
+  const mode=params.get('mode')||'smart';
+  const field=params.get('field')||'';
+  const type=params.get('type')||'text';
+  const initialLang=params.get('lang')||'en-IN';
+  const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;
+  const $=id=>document.getElementById(id);
+  let rec=null,active=false;
+  $('lang').value=[...$('lang').options].some(o=>o.value===initialLang)?initialLang:'en-IN';
+  $('modeText').textContent=mode==='field'?'Field voice entry: '+field:'Smart voice entry: speak parameter + value(s).';
+
+  function send(msg){try{if(window.opener&&!window.opener.closed)window.opener.postMessage(msg,'*')}catch(e){}}
+  function status(msg,live){$('status').textContent=msg;$('status').className='status'+(live?' live':'')}
+  function stop(sendStop){active=false;try{if(rec)rec.stop()}catch(e){}rec=null;if(sendStop)send({type:'TQ_VOICE_STOPPED'});status('Stopped. Click Start Listening to continue.',false)}
+  function start(){
+    if(!Recognition){const m='Speech Recognition is not supported in this browser. Use Google Chrome or Microsoft Edge.';status(m,false);send({type:'TQ_VOICE_ERROR',message:m});return}
+    stop(false);
+    rec=new Recognition();rec.lang=$('lang').value;rec.continuous=mode==='smart';rec.interimResults=true;rec.maxAlternatives=1;active=true;
+    rec.onstart=()=>{status('Microphone is active. Speak now…',true);send({type:'TQ_VOICE_READY'})};
+    rec.onresult=e=>{
+      let finalText='',interim='';
+      for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript;if(e.results[i].isFinal)finalText+=t+' ';else interim+=t+' '}
+      if(finalText.trim()){
+        const t=finalText.trim();$('heard').textContent=t;
+        send({type:'TQ_VOICE_RESULT',transcript:t,finalForField:mode==='field',fieldKey:field,fieldType:type});
+      }else if(interim.trim())$('heard').textContent=interim.trim();
+    };
+    rec.onerror=e=>{
+      const map={
+        'not-allowed':'Microphone permission was denied. In Chrome/Edge, click the lock/tune icon beside the Voice Bridge URL and set Microphone to Allow, then reload this tab.',
+        'service-not-allowed':'The browser speech service is not allowed. Use Google Chrome or Microsoft Edge and allow microphone access.',
+        'audio-capture':'No working microphone was found. Check the Windows microphone/privacy settings.',
+        'network':'Speech recognition network service is unavailable. Check internet connectivity.',
+        'aborted':'Voice recognition was stopped.'
+      };
+      const m=map[e.error]||('Voice recognition error: '+e.error);
+      status(m,false);send({type:'TQ_VOICE_ERROR',message:m});
+      if(e.error==='not-allowed'||e.error==='service-not-allowed'||e.error==='audio-capture')stop(false);
+    };
+    rec.onend=()=>{if(active&&mode==='smart'){setTimeout(()=>{if(active){try{rec.start()}catch(e){}}},250)}else if(active){stop(false)}};
+    try{rec.start()}catch(e){status('Unable to start microphone: '+e.message,false);send({type:'TQ_VOICE_ERROR',message:e.message});stop(false)}
+  }
+  $('start').onclick=start;$('stop').onclick=()=>stop(true);$('close').onclick=()=>{stop(true);window.close()};
+  window.addEventListener('beforeunload',()=>{if(active)send({type:'TQ_VOICE_STOPPED'})});
+})();
+</script>
+</body>
+</html>
